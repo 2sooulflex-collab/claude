@@ -6,7 +6,7 @@
   batch "Партия" units=1780 boxes=130 per_box=14 liters=60 shipped=500
                     обновить количества на листе Партии
   check             проверить данные против справочников
-  build             собрать out/Расходы 2Flex2Sooul.xlsx
+  build             собрать out/Расходы 2Flex2Sooul.xlsx и компактный out/upload.xlsx для загрузки на Диск
   summary           посчитать Сводку в Python (для сверки с таблицей и ответов в чате)
   import файл.xlsx  забрать Транзакции и Партии из выгрузки Google Таблицы (правки руками, восстановление)
 """
@@ -29,6 +29,7 @@ DATA = ROOT / "data"
 TX_CSV = DATA / "transactions.csv"
 BATCH_CSV = DATA / "batches.csv"
 OUT = ROOT / "out" / "Расходы 2Flex2Sooul.xlsx"
+UPLOAD = ROOT / "out" / "upload.xlsx"
 
 # колонки листа Транзакции: ключ, заголовок, ключ JSON из промта
 TX_FIELDS = [
@@ -470,19 +471,35 @@ def sheet_lists(wb):
         ws.column_dimensions[get_column_letter(c + 1)].width = 3
 
 
-def cmd_build(_):
-    _, rows = read_csv(TX_CSV)
-    brows = batches()
+def make_workbook(rows, brows, instructions=True):
     wb = Workbook()
-    sheet_instructions(wb)
+    if instructions:
+        sheet_instructions(wb)
+    else:
+        wb.remove(wb.active)
     sheet_transactions(wb, rows, len(brows))
     sheet_batches(wb, brows)
     sheet_summary(wb, brows)
     sheet_lists(wb)
-    wb.active = 1
+    wb.active = 1 if instructions else 0
+    return wb
+
+
+def cmd_build(_):
+    """Полный файл (для отправки пользователю) и компактный out/upload.xlsx для загрузки на Диск:
+    без листа «Инструкция» (она лежит в папке отдельным документом) и без темы/docProps."""
+    from strip_xlsx import strip
+    _, rows = read_csv(TX_CSV)
+    brows = batches()
     OUT.parent.mkdir(exist_ok=True)
-    wb.save(OUT)
+    make_workbook(rows, brows).save(OUT)
+    raw = OUT.parent / "upload_raw.xlsx"
+    make_workbook(rows, brows, instructions=False).save(raw)
+    strip(raw, UPLOAD)
+    raw.unlink()
+    size = UPLOAD.stat().st_size
     print(f"{OUT} ({OUT.stat().st_size} байт, строк: {len(rows)})")
+    print(f"{UPLOAD} ({size} байт, base64 ≈ {(size + 2) // 3 * 4} символов)")
 
 
 def cmd_summary(_):

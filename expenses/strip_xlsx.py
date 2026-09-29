@@ -7,6 +7,7 @@ DROP = ("docProps/app.xml", "docProps/core.xml", "xl/theme/theme1.xml")
 
 
 def strip(src, dst):
+    """src, dst — пути к xlsx."""
     zin = zipfile.ZipFile(src)
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for info in zin.infolist():
