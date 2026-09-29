@@ -52,6 +52,9 @@ BATCH_COLS = ["Артикул/партия", "Тип изделия", "Сезо�
               "Отгружено единиц"]
 BATCH_KEYS = {"units": 4, "boxes": 5, "per_box": 6, "liters": 7, "shipped": 8}
 OTHER = "Прочие расходы"
+# статьи — подразбивка категорий, у которых она есть (ФФ по фулфилментам, прочие — по видам)
+ARTICLES = LISTS["articles"]
+ALL_ARTICLES = [a for arts in ARTICLES.values() for a in arts]
 NOT_TIED = "не привязан"
 
 HEADER_FILL = PatternFill("solid", fgColor="D9E2F3")
@@ -105,14 +108,16 @@ def amount(row):
 def validate(row, batch_names):
     """Ошибки строки транзакции: такая строка не добавляется."""
     issues = []
-    checks = [("cat", "categories", "категория"), ("art", "articles", "статья"),
-              ("ptype", "product_types", "тип изделия"), ("season", "seasons", "сезон"),
+    checks = [("cat", "categories", "категория"), ("ptype", "product_types", "тип изделия"), ("season", "seasons", "сезон"),
               ("supplier", "suppliers", "поставщик"), ("alloc", "allocation_types", "тип отнесения")]
     for key, lst, label in checks:
         v = row[C[key]]
         if v and v not in LISTS[lst]:
             issues.append(f"{label} «{v}» не из справочника")
-    if not row[C["cat"]]:
+    cat, art = row[C["cat"]], row[C["art"]]
+    if art and art not in ARTICLES.get(cat, []):
+        issues.append(f"статья «{art}» не из справочника для категории «{cat}»")
+    if not cat:
         issues.append("пустая категория")
     if not row[C["alloc"]]:
         issues.append("пустой тип отнесения")
@@ -135,8 +140,8 @@ def warnings(row):
     out = []
     if row[C["alloc"]] == "Прямой" and not row[C["batch"]]:
         out.append("прямой расход без партии — в себестоимость не попадет, в Сводке в строке «Прямые без партии»")
-    if row[C["cat"]] == OTHER and not row[C["art"]]:
-        out.append("прочий расход без статьи — в Сводке в строке «без статьи»")
+    if row[C["cat"]] in ARTICLES and not row[C["art"]]:
+        out.append("нет статьи — в Сводке в строке «без статьи» под своей категорией")
     return out
 
 
@@ -233,11 +238,11 @@ def sheet_instructions(wb):
         ("Учет расходов 2Flex2Sooul", "title"),
         ("Платежи пишите в чат Claude — он разносит их и присылает обновленный файл. Обновить таблицу: Файл → Импортировать → "
          "Загрузить → «Заменить таблицу» (ссылка не меняется). Правки лучше писать в чат, иначе следующий файл их затрет.", None),
-        ("Транзакции — строка на платеж, дата — дата платежа по чеку. «Статья» — для прочих расходов. Красным — не попадет "
-         "в себестоимость, оранжевым — прочие без статьи.", None),
+        ("Транзакции — строка на платеж, дата — дата платежа по чеку. «Статья» — какой фулфилмент для ФФ и вид для прочих "
+         "расходов. Красным — не попадет в себестоимость, оранжевым — ФФ или прочие без статьи.", None),
         ("Партии — количества из приемки (желтые ячейки), без них нет себестоимости на единицу.", None),
         ("Сводка — все расходы: партии, общие и смешанные, прямые без партии; ИТОГО = все расходы. Ниже — сверка, общие по сезонам, "
-         "категории с разбивкой прочих по статьям.", None),
+         "категории с разбивкой ФФ по фулфилментам и прочих по статьям.", None),
         ("Прямые расходы идут в свою партию. Общие и смешанные с сезоном делятся между партиями сезона, с сезоном «не привязан» — "
          "между всеми партиями, пропорционально единицам.", None),
         ("Открытые вопросы: делить общие по единицам или коробкам; какая цифра на единицу основная; размерники и этикетки — "
@@ -275,11 +280,14 @@ def sheet_transactions(wb, rows, nb):
     L = {k: "$" + col(k) + "2" for k in C}
     red = f'OR(AND({L["amount"]}="",{L["cat"]}<>""),AND({L["cat"]}<>"",{L["alloc"]}=""),AND({L["alloc"]}="Прямой",{L["batch"]}=""))'
     ws.conditional_formatting.add(area, FormulaRule(formula=[red], fill=PatternFill("solid", bgColor="F4CCCC")))
-    orange = f'AND({L["cat"]}="{OTHER}",{L["art"]}="")'
+    with_art = ",".join(f'{L["cat"]}="{c}"' for c in ARTICLES)
+    orange = f'AND(OR({with_art}),{L["art"]}="")'
     ws.conditional_formatting.add(area, FormulaRule(formula=[orange], fill=PatternFill("solid", bgColor="FCE5CD")))
-    lists = [("cat", "A", "categories"), ("art", "C", "articles"), ("ptype", "E", "product_types"),
+    lists = [("cat", "A", "categories"), ("art", "C", "all_articles"), ("ptype", "E", "product_types"),
              ("season", "G", "seasons"), ("supplier", "I", "suppliers"), ("alloc", "K", "allocation_types")]
-    refs = [(key, f"'Справочники'!${c}$2:${c}${1 + len(LISTS[lst])}") for key, c, lst in lists]
+    sizes = dict((k, len(v)) for k, v in LISTS.items() if isinstance(v, list))
+    sizes["all_articles"] = len(ALL_ARTICLES)
+    refs = [(key, f"'Справочники'!${c}$2:${c}${1 + sizes[lst]}") for key, c, lst in lists]
     refs.append(("batch", f"'Партии'!$A$4:$A${3 + nb}"))
     for key, ref in refs:
         dv = DataValidation(type="list", formula1=ref, allow_blank=True)
@@ -407,7 +415,7 @@ def sheet_summary(wb, brows):
     ws.cell(r + 1, 1).font = BOLD
     ws.cell(r + 1, 2).font = BOLD
 
-    # расходы по категориям, прочие — по статьям
+    # расходы по категориям, ФФ и прочие — по статьям
     assert r + len(recon) + 2 == pool_hdr, "блок сезонов съехал"
     r = p_last + 2
     ws.cell(r, 1, "Расходы по категориям").font = Font(bold=True, size=12)
@@ -416,11 +424,12 @@ def sheet_summary(wb, brows):
     style_header(ws, r + 1, 5)
     k = r + 2
     cat_rows = []
+    total_line = r + 2 + len(cats) + sum(len(a) + 1 for a in ARTICLES.values())
 
     def line(label, crit, indent=False):
         ws.cell(k, 1, ("      " if indent else "") + label)
         ws.cell(k, 2, f"=SUMIFS({SUM},{crit})").number_format = MONEY
-        ws.cell(k, 3, f"=IFERROR(B{k}/$B${r + 2 + len(cats) + len(LISTS['articles']) + 1},0)").number_format = "0.0%"
+        ws.cell(k, 3, f"=IFERROR(B{k}/$B${total_line},0)").number_format = "0.0%"
         ws.cell(k, 4, f"=COUNTIFS({crit})")
         ws.cell(k, 5, f'=IF(D{k}=0,"",MAXIFS({DATE},{crit}))').number_format = "DD.MM.YYYY"
         if indent:
@@ -431,17 +440,16 @@ def sheet_summary(wb, brows):
         cat_rows.append(k)
         line(cat, f'{CAT},"{cat}"')
         k += 1
-        if cat == OTHER:
-            for art in LISTS["articles"] + [""]:
-                line(art or "без статьи", f'{CAT},"{OTHER}",{ART},"{art}"', indent=True)
-                k += 1
+        for art in ARTICLES.get(cat, []) + ([""] if cat in ARTICLES else []):
+            line(art or "без статьи", f'{CAT},"{cat}",{ART},"{art}"', indent=True)
+            k += 1
     ws.cell(k, 1, "ИТОГО")
     ws.cell(k, 2, "=" + "+".join(f"B{x}" for x in cat_rows)).number_format = MONEY
     ws.cell(k, 3, f"=IFERROR(B{k}/B{k},0)").number_format = "0.0%"
     ws.cell(k, 4, "=" + "+".join(f"D{x}" for x in cat_rows))
     ws.cell(k, 5, f"=MAX(E{r + 2}:E{k - 1})").number_format = "DD.MM.YYYY"
     style_row(ws, k, 5, TOTAL_FILL, bold=True)
-    assert k == r + 2 + len(cats) + len(LISTS["articles"]) + 1, "ссылка на ИТОГО в колонке «Доля» съехала"
+    assert k == total_line, "ссылка на ИТОГО в колонке «Доля» съехала"
 
     ws.freeze_panes = "B4"
     widths(ws, [44, 20, 13, 11, 16] + [13] * len(cats) + [13, 13, 13, 12, 12])
@@ -449,14 +457,14 @@ def sheet_summary(wb, brows):
 
 def sheet_lists(wb):
     ws = wb.create_sheet("Справочники")
-    cols = [(1, "Категории расхода", "categories"), (3, "Статьи прочих расходов", "articles"),
+    cols = [(1, "Категории расхода", "categories"), (3, "Статьи (ФФ и прочие)", "all_articles"),
             (5, "Типы изделий", "product_types"), (7, "Сезоны", "seasons"),
             (9, "Поставщик/производство", "suppliers"), (11, "Тип отнесения", "allocation_types")]
     for c, title, key in cols:
         ws.cell(1, c, title)
         ws.cell(1, c).font = BOLD
         ws.cell(1, c).fill = HEADER_FILL
-        for i, v in enumerate(LISTS[key], start=2):
+        for i, v in enumerate(ALL_ARTICLES if key == "all_articles" else LISTS[key], start=2):
             ws.cell(i, c, v)
         ws.column_dimensions[get_column_letter(c)].width = 38 if c == 1 else 26
         ws.column_dimensions[get_column_letter(c + 1)].width = 3
@@ -520,11 +528,10 @@ def cmd_summary(_):
     for cat in LISTS["categories"]:
         in_cat = [r for r in rows if r[C["cat"]] == cat]
         print(f"  {cat}: {fmt(sum(amount(r) for r in in_cat))} ({len(in_cat)})")
-        if cat == OTHER:
-            for art in LISTS["articles"] + [""]:
-                in_art = [r for r in in_cat if r[C["art"]] == art]
-                if in_art:
-                    print(f"      {art or 'без статьи'}: {fmt(sum(amount(r) for r in in_art))} ({len(in_art)})")
+        for art in ARTICLES.get(cat, []) + ([""] if cat in ARTICLES else []):
+            in_art = [r for r in in_cat if r[C["art"]] == art]
+            if in_art:
+                print(f"      {art or 'без статьи'}: {fmt(sum(amount(r) for r in in_art))} ({len(in_art)})")
 
 
 def cmd_import(args):
