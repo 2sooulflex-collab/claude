@@ -233,7 +233,8 @@ def build(out):
             fmt(gr(T, 2, 10, None, 10), number=MONEY), freeze(T, 1),
             {"setBasicFilter": {"filter": {"range": gr(T, 1, 1, None, ntx)}}}]
     req += widths(T, [90, 230, 150, 150, 95, 160, 230, 110, 75, 95, 460])
-    lists = {"cat": "$A$2:$A$10", "art": f"$C$2:$C${1 + len(ledger.ALL_ARTICLES)}", "ptype": "$E$2:$E$11",
+    lists = {"cat": f"$A$2:$A${1 + len(ledger.LISTS['categories'])}",
+             "art": f"$C$2:$C${1 + len(ledger.ALL_ARTICLES)}", "ptype": "$E$2:$E$11",
              "season": "$G$2:$G$8", "supplier": "$I$2:$I$6", "alloc": "$K$2:$K$4"}
     for key, ref in list(lists.items()) + [("batch", None)]:
         src = f"=Партии!$A$4:$A${3 + nb}" if key == "batch" else f"=Справочники!{ref}"
