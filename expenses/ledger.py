@@ -9,6 +9,7 @@
   build             собрать out/Расходы 2Flex2Sooul.xlsx и компактный out/upload.xlsx для загрузки на Диск
   summary           посчитать Сводку в Python (для сверки с таблицей и ответов в чате)
   import файл.xlsx  забрать Транзакции и Партии из выгрузки Google Таблицы (правки руками, восстановление)
+  fromsheet файл.json  то же из ответа коннектора get_spreadsheet (effectiveValue Транзакции!A1:K и Партии!A3:I)
 """
 import csv
 import datetime as dt
@@ -580,9 +581,43 @@ def cmd_import(args):
     cmd_check([])
 
 
+def cmd_fromsheet(args):
+    """Ответ get_spreadsheet с effectiveValue: суммы с копейками и даты числом (get_values округляет по формату)."""
+    data = json.load(open(args[0], encoding="utf-8"))
+    sheets = {s["properties"]["title"]: s["data"][0].get("rowData", []) for s in data["sheets"]}
+
+    def cell(c, is_date=False):
+        v = c.get("effectiveValue", {})
+        if "numberValue" in v:
+            n = v["numberValue"]
+            if is_date:
+                return (dt.date(1899, 12, 30) + dt.timedelta(days=int(n))).strftime("%d.%m.%Y")
+            return str(num(n))
+        return str(v.get("stringValue", v.get("boolValue", ""))).strip()
+
+    def table(rows, ncols):
+        out = []
+        for r in rows:
+            vals = r.get("values", [])
+            out.append([cell(vals[i], is_date=(i == 0 and ncols == len(TX_COLS))) if i < len(vals) else ""
+                        for i in range(ncols)])
+        return out
+
+    tx_all = table(sheets["Транзакции"], len(TX_COLS))
+    assert tx_all[0] == TX_COLS, f"заголовок Транзакций не совпал: {tx_all[0]}"
+    tx_rows = tx_all[1:]
+    while tx_rows and not any(tx_rows[-1]):
+        tx_rows.pop()
+    bt = [r for r in table(sheets["Партии"], len(BATCH_COLS))[1:] if r[0]]
+    write_csv(TX_CSV, TX_COLS, tx_rows)
+    write_csv(BATCH_CSV, BATCH_COLS, bt)
+    print(f"Транзакций: {len(tx_rows)}, партий: {len(bt)}")
+    cmd_check([])
+
+
 if __name__ == "__main__":
     cmds = {"add": cmd_add, "batch": cmd_batch, "check": cmd_check, "build": cmd_build,
-            "summary": cmd_summary, "import": cmd_import}
+            "summary": cmd_summary, "import": cmd_import, "fromsheet": cmd_fromsheet}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         sys.exit(__doc__)
     cmds[sys.argv[1]](sys.argv[2:])
