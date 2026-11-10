@@ -2,3 +2,14 @@
 expenses/data/
 expenses/out/
 __pycache__/
+
+# Локальные выгрузки и секреты
+/data/
+/xlsx/
+*.csv
+*.xlsx
+*.pdf
+.env
+.env.*
+credentials*.json
+token*.json
